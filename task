@@ -1,0 +1,209 @@
+#include <assert.h>
+#include <stdio.h>
+#include <unistd.h>
+#include <pthread.h>
+#include <time.h>
+#include <stdlib.h>
+#include <math.h>
+
+#define max(a, b)      (a > b) ? a : b 
+#define min(a, b)      (a < b) ? a : b 
+
+int sum(int* start, int* end) {
+  int sum = 0;
+  for(int* i = start;i < end;i++) sum += *i;
+  return sum;
+}
+
+struct Addition_task {
+  int* arr;
+  int total_size;
+  int task_size;
+  int todo;
+  int sum;
+  pthread_mutex_t lock;
+};
+
+/*
+  Job:
+    this function should "synchronously" get the next task to be done for the calling thread
+  Pamaters:
+    struct Addition_task* t: The task to work on
+    int add: the amount to add on the total sum of the task
+  Return:
+    void
+*/
+int get_task(struct Addition_task* t) {
+  // add your code here
+  pthread_mutex_lock(&t->lock);
+  int current_task = t->todo;
+  t->todo += t->task_size;
+  pthread_mutex_unlock(&t->lock);
+
+  return current_task;
+}
+
+/*
+  Job:
+    this function should "synchronously" add a provided amount to the shared sum
+  Pamaters:
+    struct Addition_task* t: The task to work on
+    int add: the amount to add on the total sum of the task
+  Return:
+    void
+*/
+void update_result(struct Addition_task* t, int add) {
+  // add your code here
+  pthread_mutex_lock(&t->lock);
+  t->sum += add;
+  pthread_mutex_unlock(&t->lock);
+}
+
+/*
+  Job:
+    The function that the thread will execute
+    implemented as explained in the threaded_sum description
+  Pamaters:
+    void* t: referes to the task the thread will work on (note: all threads share the same task variables)
+  Return:
+    void* NULL
+*/
+void* sum_handler(void* t) {
+  struct Addition_task* task = (struct Addition_task*)t;
+  int task_sz = task->task_size;
+  int* sub_arr = task->arr;
+
+  while (1) {
+    int start = get_task(task);
+    if (start >= task->total_size)break;
+
+    int end = min(start + task_sz, task->total_size);
+    int result = sum(sub_arr + start, sub_arr + end);
+    update_result(task, result);
+  }
+
+  return NULL;
+}
+
+/*
+  Job:
+    This function creates a dynamic number of threads, have them run the exact same function, with the exact same input.
+  Pamaters:
+    count::int              : the number of threads to
+    args::(void*)           : a point to struct that's the common input to all threads
+    handler::void* -> void* : a pointer to a function that will be executed by all threads
+  Return:
+    pthread_t* : an array of created threads
+*/
+pthread_t* create_pthreads(
+  int count,
+  void* args,
+  void* (handler)(void*)
+)
+ {
+   pthread_t* threads = (pthread_t*)malloc(sizeof(pthread_t) * count);
+  for (int i = 0; i < count; i++) {
+    pthread_create(&threads[i], NULL, handler, args);
+  }
+  return threads;
+}
+
+/*
+  Job:
+    This function forces the parent thread to wait for a dynamic number of threads
+  Pamaters: 
+    threads: A pointer to an array of threads that the parent thread must wait for ALL of them to finish before it resumes work
+    count: the number of threads in the array
+  Return:
+    Void
+*/
+void wait_threads(
+  pthread_t* threads,
+  int count
+) {
+  for (int i = 0; i < count; i++) {
+    pthread_join(threads[i], NULL);
+  }
+}
+
+/*
+  Job:
+    This function creates a dynamic number of threads and uses them to sum an array in parallel
+    The idea is to allow the threads to divide the array into sub arrays of a fixed size.
+    at each step each thread will
+    1 - get the next task to work on (the subarray that was not counted yet)
+    2 - sum the items inside it
+    3 - update the total sum outside
+    4 - if the array is not over return to step 1
+    5 - exit 
+  Pamaters:
+    int* arr: the entire array to be sumed
+    int size: the size of the array
+    int thread_count: the number of threads to use
+    int task_size: the size of a single task (subarray size)
+  Return:
+    int : the sum of the array
+*/
+int threaded_sum(int* arr, int size, int thread_count, int task_size) {
+  struct Addition_task task;
+  task.arr = arr;
+  task.total_size = size;
+  task.task_size = task_size;
+  task.todo = 0;
+  task.sum = 0;
+  pthread_mutex_init(&task.lock, NULL);
+
+  pthread_t* threads = create_pthreads(thread_count, (void*)&task, sum_handler);
+
+  wait_threads(threads, thread_count);
+
+  free(threads);
+  pthread_mutex_destroy(&task.lock);
+
+  return task.sum;
+}
+
+
+int main() {
+  // srand(0); 
+  srand(time(NULL));
+  // int n = 100;
+  // int n = 10000;
+  // int n = 1000000;
+  int n = 10000000;
+
+  // int threads_count = 1
+  // int threads_count = 2
+  int threads_count = 4;
+  // int threads_count = 8
+  // int threads_count = 16
+  // int threads_count = 32
+
+  
+
+  int* arr = (int*) malloc(sizeof(int) * n);
+  for(int i = 0;i < n;i++) arr[i] = rand() % 100;
+
+  // int arr[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+  clock_t begin = clock();
+  int s1 = threaded_sum(
+    arr,
+    n,
+    4, 
+    n / 16
+  );
+  clock_t end = clock();
+  double threaded_time = (double)(end - begin) / CLOCKS_PER_SEC;
+  
+  // thread_t* ps = create_pthreads(4, NULL, hello)
+  // wait_threads(ps, 4);
+
+  begin = clock();
+  int s2 = sum(arr, arr+n);
+  end = clock();
+  double single_time = (double)(end - begin) / CLOCKS_PER_SEC;
+  
+  printf("Threaded sum : %d, time %f s\n", s1, threaded_time);
+  printf("Main     sum : %d, time %f s\n", s2, single_time);
+  return 0;
+}
